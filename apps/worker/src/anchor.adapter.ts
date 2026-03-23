@@ -1,6 +1,13 @@
 import { Injectable } from "@nestjs/common";
 import crypto from "crypto";
-import { Contract, JsonRpcProvider, Wallet, id, isHexString } from "ethers";
+import {
+  Contract,
+  JsonRpcProvider,
+  TransactionReceipt,
+  Wallet,
+  id,
+  isHexString,
+} from "ethers";
 
 const ANCHOR_REGISTRY_ABI = [
   "event BatchAnchored(bytes32 indexed batchId, bytes32 indexed merkleRoot, uint256 anchoredAt)",
@@ -30,17 +37,25 @@ export class AnchorAdapter {
       .map((url) => new JsonRpcProvider(url));
   }
 
-  private isRetryableRpcError(error: any) {
-    const code = String(error?.code ?? error?.error?.code ?? "");
+  private async sleep(ms: number) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private isRetryableSendError(error: any) {
+    const code = String(
+      error?.code ?? error?.error?.code ?? error?.info?.error?.code ?? ""
+    );
     const shortMessage = String(error?.shortMessage ?? "").toLowerCase();
     const message = String(error?.message ?? "").toLowerCase();
-    const rpcMessage = String(error?.error?.message ?? "").toLowerCase();
-    const payloadMethod = String(
+    const rpcMessage = String(
+      error?.error?.message ?? error?.info?.error?.message ?? ""
+    ).toLowerCase();
+    const method = String(
       error?.payload?.method ?? error?.info?.payload?.method ?? ""
     );
 
     return (
-      payloadMethod === "eth_getTransactionCount" ||
+      method === "eth_getTransactionCount" ||
       code === "UNKNOWN_ERROR" ||
       code === "-32603" ||
       shortMessage.includes("could not coalesce error") ||
@@ -53,6 +68,80 @@ export class AnchorAdapter {
       message.includes("too many requests") ||
       message.includes("429")
     );
+  }
+
+  private isRetryableReceiptError(error: any) {
+    const code = String(
+      error?.code ?? error?.error?.code ?? error?.info?.error?.code ?? ""
+    );
+    const shortMessage = String(error?.shortMessage ?? "").toLowerCase();
+    const message = String(error?.message ?? "").toLowerCase();
+    const rpcMessage = String(
+      error?.error?.message ?? error?.info?.error?.message ?? ""
+    ).toLowerCase();
+    const method = String(
+      error?.payload?.method ?? error?.info?.payload?.method ?? ""
+    );
+
+    return (
+      method === "eth_getTransactionReceipt" &&
+      (code === "26" ||
+        code === "UNKNOWN_ERROR" ||
+        shortMessage.includes("could not coalesce error") ||
+        message.includes("unknown block") ||
+        rpcMessage.includes("unknown block") ||
+        message.includes("timeout") ||
+        message.includes("network"))
+    );
+  }
+
+  private async waitForReceiptWithRetry(
+    txHash: string,
+    confirmations: number,
+    providers: JsonRpcProvider[]
+  ) {
+    const maxAttempts = Number(process.env.ANCHOR_RECEIPT_MAX_ATTEMPTS || 40);
+    const delayMs = Number(process.env.ANCHOR_RECEIPT_POLL_MS || 3000);
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      for (const provider of providers) {
+        try {
+          const receipt = await provider.getTransactionReceipt(txHash);
+
+          if (!receipt) {
+            continue;
+          }
+
+          if (confirmations <= 1) {
+            return receipt;
+          }
+
+          const currentBlock = await provider.getBlockNumber();
+          const minedConfirmations = currentBlock - receipt.blockNumber + 1;
+
+          if (minedConfirmations >= confirmations) {
+            return receipt;
+          }
+        } catch (error) {
+          lastError = error;
+          if (!this.isRetryableReceiptError(error)) {
+            throw error;
+          }
+        }
+      }
+
+      await this.sleep(delayMs);
+    }
+
+    if (
+      lastError instanceof Error &&
+      !this.isRetryableReceiptError(lastError)
+    ) {
+      throw lastError;
+    }
+
+    throw new Error(`Timed out waiting for transaction receipt for ${txHash}`);
   }
 
   async anchorBatch(input: {
@@ -91,7 +180,9 @@ export class AnchorAdapter {
     const chainBatchId = this.normalizeBatchId(input.batchId);
     const confirmations = Number(process.env.ANCHOR_CONFIRMATIONS || 1);
 
-    let lastError: unknown;
+    let tx: any = null;
+    let sendProvider: JsonRpcProvider | null = null;
+    let lastSendError: unknown;
 
     for (const provider of providers) {
       try {
@@ -102,31 +193,55 @@ export class AnchorAdapter {
           wallet
         );
 
-        const tx = await contract.anchorBatch(chainBatchId, merkleRoot);
-        const receipt = await tx.wait(confirmations);
-
-        return {
-          batchId: input.batchId,
-          chainBatchId,
-          txHash: receipt?.hash || tx.hash,
-          network: process.env.CHAIN_NETWORK || "polygon",
-          contractAddress,
-          anchoredAt: new Date(),
-          merkleRoot,
-          isMock: false,
-        };
+        tx = await contract.anchorBatch(chainBatchId, merkleRoot);
+        sendProvider = provider;
+        break;
       } catch (error) {
-        lastError = error;
-
+        lastSendError = error;
         const isLastProvider = provider === providers[providers.length - 1];
-        if (!this.isRetryableRpcError(error) || isLastProvider) {
+
+        if (!this.isRetryableSendError(error) || isLastProvider) {
           throw error;
         }
       }
     }
 
-    throw lastError instanceof Error
-      ? lastError
-      : new Error("Anchor submission failed");
+    if (!tx || !sendProvider) {
+      throw lastSendError instanceof Error
+        ? lastSendError
+        : new Error("Failed to submit anchor transaction");
+    }
+
+    const receiptProviders = [
+      sendProvider,
+      ...providers.filter((provider) => provider !== sendProvider),
+    ];
+
+    let receipt: TransactionReceipt | null = null;
+
+    try {
+      receipt = await tx.wait(confirmations);
+    } catch (error) {
+      if (!this.isRetryableReceiptError(error)) {
+        throw error;
+      }
+    }
+
+    receipt ||= await this.waitForReceiptWithRetry(
+      tx.hash,
+      confirmations,
+      receiptProviders
+    );
+
+    return {
+      batchId: input.batchId,
+      chainBatchId,
+      txHash: receipt.hash || tx.hash,
+      network: process.env.CHAIN_NETWORK || "polygon",
+      contractAddress,
+      anchoredAt: new Date(),
+      merkleRoot,
+      isMock: false,
+    };
   }
 }
