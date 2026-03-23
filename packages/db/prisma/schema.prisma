@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum InvoiceStatus {
+  saved
+  pending_anchor
+  anchor_submitted
+  anchored
+  anchor_failed_retrying
+}
+
+model Organization {
+  id         String          @id @default(cuid())
+  name       String
+  slug       String          @unique
+  createdAt  DateTime        @default(now())
+  users      User[]
+  documents  Document[]
+  invoices   InvoiceRecord[]
+}
+
+model User {
+  id           String       @id @default(cuid())
+  orgId         String
+  email         String       @unique
+  role          String
+  createdAt     DateTime     @default(now())
+  organization  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+}
+
+model Document {
+  id            String         @id @default(cuid())
+  orgId          String
+  storageKey     String
+  fileName       String
+  mimeType       String
+  fileSize       Int
+  sha256         String
+  cid            String?
+  createdAt      DateTime      @default(now())
+  organization   Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invoices       InvoiceRecord[]
+}
+
+model InvoiceRecord {
+  id             String         @id @default(cuid())
+  orgId           String
+  documentId      String?
+  publicVerifyId  String         @unique
+  invoiceNumber   String
+  customerName    String
+  amount          Decimal        @db.Decimal(18, 2)
+  currency        String
+  issueDate       DateTime
+  dueDate         DateTime?
+  notes           String?
+  status          InvoiceStatus  @default(saved)
+  recordHash      String?
+  batchId         String?
+  anchorTxHash    String?
+  createdAt       DateTime       @default(now())
+  anchoredAt      DateTime?
+  organization    Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  document        Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  proof           RecordProof?
+
+  @@index([orgId, createdAt])
+  @@index([status])
+}
+
+model AnchorBatch {
+  id             String      @id @default(cuid())
+  merkleRoot     String
+  status         String
+  txHash         String?
+  retryCount     Int         @default(0)
+  failureReason  String?
+  createdAt      DateTime    @default(now())
+  anchoredAt     DateTime?
+}
+
+model RecordProof {
+  id              String        @id @default(cuid())
+  invoiceRecordId String        @unique
+  leafHash        String
+  merkleRoot      String
+  merkleProofJson Json
+  network         String?
+  contractAddress String?
+  txHash          String?
+  createdAt       DateTime      @default(now())
+  invoiceRecord   InvoiceRecord @relation(fields: [invoiceRecordId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id             String      @id @default(cuid())
+  orgId          String?
+  userId         String?
+  action         String
+  entityType     String
+  entityId       String
+  metadataJson   Json?
+  createdAt      DateTime    @default(now())
+
+  @@index([orgId, createdAt])
+  @@index([entityType, entityId])
+}

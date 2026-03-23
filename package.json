@@ -1,0 +1,28 @@
+{
+  "name": "invoiceproof",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "npm@10.8.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:api": "npm --workspace apps/api run start:dev",
+    "dev:worker": "npm --workspace apps/worker run start:dev",
+    "db:generate": "node ./scripts/run-prisma-with-env.cjs generate",
+    "db:push": "node ./scripts/run-prisma-with-env.cjs db push",
+    "db:migrate:dev": "node ./scripts/run-prisma-with-env.cjs migrate dev",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck:web": "tsc --noEmit -p apps/web/tsconfig.json"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  },
+  "prisma": {
+    "schema": "packages/db/prisma/schema.prisma"
+  }
+}
