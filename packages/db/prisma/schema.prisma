@@ -15,6 +15,15 @@ enum InvoiceStatus {
   anchor_failed_retrying
 }
 
+enum AnchorBatchStatus {
+  batch_prepared
+  anchor_broadcasted
+  anchor_receipt_pending
+  anchor_send_failed_retryable
+  anchor_failed_final
+  anchored
+}
+
 model Organization {
   id         String          @id @default(cuid())
   name       String
@@ -27,62 +36,78 @@ model Organization {
 
 model User {
   id           String       @id @default(cuid())
-  orgId         String
-  email         String       @unique
-  role          String
-  createdAt     DateTime     @default(now())
-  organization  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId        String
+  email        String       @unique
+  role         String
+  createdAt    DateTime     @default(now())
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 }
 
 model Document {
-  id            String         @id @default(cuid())
-  orgId          String
-  storageKey     String
-  fileName       String
-  mimeType       String
-  fileSize       Int
-  sha256         String
-  cid            String?
-  createdAt      DateTime      @default(now())
-  organization   Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  invoices       InvoiceRecord[]
+  id           String         @id @default(cuid())
+  orgId        String
+  storageKey   String
+  fileName     String
+  mimeType     String
+  fileSize     Int
+  sha256       String
+  cid          String?
+  createdAt    DateTime       @default(now())
+  organization Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invoices     InvoiceRecord[]
 }
 
 model InvoiceRecord {
   id             String         @id @default(cuid())
-  orgId           String
-  documentId      String?
-  publicVerifyId  String         @unique
-  invoiceNumber   String
-  customerName    String
-  amount          Decimal        @db.Decimal(18, 2)
-  currency        String
-  issueDate       DateTime
-  dueDate         DateTime?
-  notes           String?
-  status          InvoiceStatus  @default(saved)
-  recordHash      String?
-  batchId         String?
-  anchorTxHash    String?
-  createdAt       DateTime       @default(now())
-  anchoredAt      DateTime?
-  organization    Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  document        Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
-  proof           RecordProof?
+  orgId          String
+  documentId     String?
+  publicVerifyId String         @unique
+  invoiceNumber  String
+  customerName   String
+  amount         Decimal        @db.Decimal(18, 2)
+  currency       String
+  issueDate      DateTime
+  dueDate        DateTime?
+  notes          String?
+  status         InvoiceStatus  @default(saved)
+  recordHash     String?
+  batchId        String?
+  anchorTxHash   String?
+  createdAt      DateTime       @default(now())
+  anchoredAt     DateTime?
+  organization   Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  document       Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  batch          AnchorBatch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  proof          RecordProof?
 
   @@index([orgId, createdAt])
   @@index([status])
+  @@index([batchId])
 }
 
 model AnchorBatch {
-  id             String      @id @default(cuid())
-  merkleRoot     String
-  status         String
-  txHash         String?
-  retryCount     Int         @default(0)
-  failureReason  String?
-  createdAt      DateTime    @default(now())
-  anchoredAt     DateTime?
+  id                   String            @id @default(cuid())
+  chainBatchId         String?
+  merkleRoot           String
+  status               AnchorBatchStatus @default(batch_prepared)
+  txHash               String?
+  nonce                BigInt?
+  sentAt               DateTime?
+  lastReceiptCheckAt   DateTime?
+  receiptCheckCount    Int               @default(0)
+  providerUsed         String?
+  maxFeePerGas         String?
+  maxPriorityFeePerGas String?
+  retryCount           Int               @default(0)
+  failureReason        String?
+  supersededByTxHash   String?
+  createdAt            DateTime          @default(now())
+  confirmedAt          DateTime?
+  anchoredAt           DateTime?
+  invoices             InvoiceRecord[]
+
+  @@index([status, createdAt])
+  @@index([txHash])
 }
 
 model RecordProof {
@@ -99,14 +124,14 @@ model RecordProof {
 }
 
 model AuditLog {
-  id             String      @id @default(cuid())
-  orgId          String?
-  userId         String?
-  action         String
-  entityType     String
-  entityId       String
-  metadataJson   Json?
-  createdAt      DateTime    @default(now())
+  id           String   @id @default(cuid())
+  orgId        String?
+  userId       String?
+  action       String
+  entityType   String
+  entityId     String
+  metadataJson Json?
+  createdAt    DateTime @default(now())
 
   @@index([orgId, createdAt])
   @@index([entityType, entityId])

@@ -15,8 +15,44 @@ const ANCHOR_REGISTRY_ABI = [
   "function getBatchRoot(bytes32 batchId) external view returns (bytes32 merkleRoot, uint256 anchoredAt)",
 ] as const;
 
+type ProviderEntry = {
+  url: string;
+  provider: JsonRpcProvider;
+};
+
+type SendAnchorBatchResult = {
+  batchId: string;
+  chainBatchId: string;
+  txHash: string;
+  nonce: bigint | null;
+  network: string;
+  contractAddress: string;
+  sentAt: Date;
+  merkleRoot: string;
+  providerUsed: string;
+  maxFeePerGas: string | null;
+  maxPriorityFeePerGas: string | null;
+  isMock: boolean;
+};
+
+type ReceiptLookupResult = {
+  status: "pending" | "confirmed";
+  receipt: TransactionReceipt | null;
+  providerUsed: string | null;
+  anchoredAt: Date | null;
+};
+
+type OnChainBatchState = {
+  exists: boolean;
+  merkleRoot: string | null;
+  anchoredAt: Date | null;
+  providerUsed: string | null;
+};
+
 @Injectable()
 export class AnchorAdapter {
+  private readonly zeroRoot = `0x${"00".repeat(32)}`;
+
   private normalizeRoot(value: string) {
     if (isHexString(value, 32)) return value;
     const prefixed = value.startsWith("0x") ? value : `0x${value}`;
@@ -31,14 +67,13 @@ export class AnchorAdapter {
     return id(value);
   }
 
-  private buildProviders() {
+  private buildProviders(): ProviderEntry[] {
     return [process.env.RPC_PRIMARY_URL, process.env.RPC_FALLBACK_URL]
       .filter((url): url is string => Boolean(url))
-      .map((url) => new JsonRpcProvider(url));
-  }
-
-  private async sleep(ms: number) {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+      .map((url) => ({
+        url,
+        provider: new JsonRpcProvider(url),
+      }));
   }
 
   private isRetryableSendError(error: any) {
@@ -91,64 +126,104 @@ export class AnchorAdapter {
         message.includes("unknown block") ||
         rpcMessage.includes("unknown block") ||
         message.includes("timeout") ||
-        message.includes("network"))
+        message.includes("network") ||
+        message.includes("temporarily unavailable") ||
+        message.includes("429"))
     );
   }
 
-  private async waitForReceiptWithRetry(
-    txHash: string,
-    confirmations: number,
-    providers: JsonRpcProvider[]
-  ) {
-    const maxAttempts = Number(process.env.ANCHOR_RECEIPT_MAX_ATTEMPTS || 40);
-    const delayMs = Number(process.env.ANCHOR_RECEIPT_POLL_MS || 3000);
-    let lastError: unknown;
+  private isRetryableReadError(error: any) {
+    const code = String(
+      error?.code ?? error?.error?.code ?? error?.info?.error?.code ?? ""
+    );
+    const message = String(error?.message ?? "").toLowerCase();
+    const rpcMessage = String(
+      error?.error?.message ?? error?.info?.error?.message ?? ""
+    ).toLowerCase();
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      for (const provider of providers) {
-        try {
-          const receipt = await provider.getTransactionReceipt(txHash);
-
-          if (!receipt) {
-            continue;
-          }
-
-          if (confirmations <= 1) {
-            return receipt;
-          }
-
-          const currentBlock = await provider.getBlockNumber();
-          const minedConfirmations = currentBlock - receipt.blockNumber + 1;
-
-          if (minedConfirmations >= confirmations) {
-            return receipt;
-          }
-        } catch (error) {
-          lastError = error;
-          if (!this.isRetryableReceiptError(error)) {
-            throw error;
-          }
-        }
-      }
-
-      await this.sleep(delayMs);
-    }
-
-    if (
-      lastError instanceof Error &&
-      !this.isRetryableReceiptError(lastError)
-    ) {
-      throw lastError;
-    }
-
-    throw new Error(`Timed out waiting for transaction receipt for ${txHash}`);
+    return (
+      code === "UNKNOWN_ERROR" ||
+      code === "-32603" ||
+      message.includes("timeout") ||
+      message.includes("network") ||
+      message.includes("temporarily unavailable") ||
+      message.includes("429") ||
+      rpcMessage.includes("timeout") ||
+      rpcMessage.includes("network")
+    );
   }
 
-  async anchorBatch(input: {
+  async getBatchState(input: { batchId: string }): Promise<OnChainBatchState> {
+    const contractAddress = process.env.ANCHOR_CONTRACT_ADDRESS;
+    const providers = this.buildProviders();
+
+    if (
+      process.env.USE_MOCK_ANCHOR === "true" ||
+      !contractAddress ||
+      providers.length === 0
+    ) {
+      return {
+        exists: false,
+        merkleRoot: null,
+        anchoredAt: null,
+        providerUsed: null,
+      };
+    }
+
+    const chainBatchId = this.normalizeBatchId(input.batchId);
+
+    for (const entry of providers) {
+      try {
+        const contract = new Contract(
+          contractAddress,
+          ANCHOR_REGISTRY_ABI,
+          entry.provider
+        );
+        const result: any = await contract.getBatchRoot(chainBatchId);
+        const merkleRoot = String(
+          result?.[0] ?? result?.merkleRoot ?? this.zeroRoot
+        );
+        const anchoredAtRaw = result?.[1] ?? result?.anchoredAt ?? 0n;
+        const anchoredAtSeconds =
+          typeof anchoredAtRaw === "bigint"
+            ? anchoredAtRaw
+            : BigInt(anchoredAtRaw?.toString?.() ?? "0");
+
+        if (merkleRoot !== this.zeroRoot && anchoredAtSeconds > 0n) {
+          return {
+            exists: true,
+            merkleRoot,
+            anchoredAt: new Date(Number(anchoredAtSeconds) * 1000),
+            providerUsed: entry.url,
+          };
+        }
+
+        return {
+          exists: false,
+          merkleRoot: null,
+          anchoredAt: null,
+          providerUsed: entry.url,
+        };
+      } catch (error) {
+        if (!this.isRetryableReadError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    return {
+      exists: false,
+      merkleRoot: null,
+      anchoredAt: null,
+      providerUsed: null,
+    };
+  }
+
+  async sendAnchorBatch(input: {
     batchId: string;
     merkleRoot: string;
     timestamp: number;
-  }) {
+  }): Promise<SendAnchorBatchResult> {
     const contractAddress = process.env.ANCHOR_CONTRACT_ADDRESS;
     const privateKey = process.env.ANCHOR_PRIVATE_KEY;
     const providers = this.buildProviders();
@@ -168,37 +243,49 @@ export class AnchorAdapter {
         batchId: input.batchId,
         chainBatchId: this.normalizeBatchId(input.batchId),
         txHash,
+        nonce: 0n,
         network: process.env.CHAIN_NETWORK || "mock-local",
         contractAddress: contractAddress || "0xMockAnchorRegistry",
-        anchoredAt: new Date(),
+        sentAt: new Date(),
         merkleRoot: this.normalizeRoot(input.merkleRoot),
+        providerUsed: "mock-local",
+        maxFeePerGas: null,
+        maxPriorityFeePerGas: null,
         isMock: true,
       };
     }
 
     const merkleRoot = this.normalizeRoot(input.merkleRoot);
     const chainBatchId = this.normalizeBatchId(input.batchId);
-    const confirmations = Number(process.env.ANCHOR_CONFIRMATIONS || 1);
-
-    let tx: any = null;
-    let sendProvider: JsonRpcProvider | null = null;
     let lastSendError: unknown;
 
-    for (const provider of providers) {
+    for (const entry of providers) {
       try {
-        const wallet = new Wallet(privateKey, provider);
+        const wallet = new Wallet(privateKey, entry.provider);
         const contract = new Contract(
           contractAddress,
           ANCHOR_REGISTRY_ABI,
           wallet
         );
+        const tx: any = await contract.anchorBatch(chainBatchId, merkleRoot);
 
-        tx = await contract.anchorBatch(chainBatchId, merkleRoot);
-        sendProvider = provider;
-        break;
+        return {
+          batchId: input.batchId,
+          chainBatchId,
+          txHash: tx.hash,
+          nonce: typeof tx.nonce === "number" ? BigInt(tx.nonce) : null,
+          network: process.env.CHAIN_NETWORK || "polygon",
+          contractAddress,
+          sentAt: new Date(),
+          merkleRoot,
+          providerUsed: entry.url,
+          maxFeePerGas: tx.maxFeePerGas?.toString?.() ?? null,
+          maxPriorityFeePerGas: tx.maxPriorityFeePerGas?.toString?.() ?? null,
+          isMock: false,
+        };
       } catch (error) {
         lastSendError = error;
-        const isLastProvider = provider === providers[providers.length - 1];
+        const isLastProvider = entry === providers[providers.length - 1];
 
         if (!this.isRetryableSendError(error) || isLastProvider) {
           throw error;
@@ -206,42 +293,79 @@ export class AnchorAdapter {
       }
     }
 
-    if (!tx || !sendProvider) {
-      throw lastSendError instanceof Error
-        ? lastSendError
-        : new Error("Failed to submit anchor transaction");
+    throw lastSendError instanceof Error
+      ? lastSendError
+      : new Error("Failed to submit anchor transaction");
+  }
+
+  async getTransactionReceiptSafe(input: {
+    txHash: string;
+    confirmations?: number;
+  }): Promise<ReceiptLookupResult> {
+    const providers = this.buildProviders();
+    const confirmations = Number(input.confirmations || 1);
+    const useMock =
+      process.env.USE_MOCK_ANCHOR === "true" || providers.length === 0;
+
+    if (useMock) {
+      return {
+        status: "confirmed",
+        receipt: null,
+        providerUsed: "mock-local",
+        anchoredAt: new Date(),
+      };
     }
 
-    const receiptProviders = [
-      sendProvider,
-      ...providers.filter((provider) => provider !== sendProvider),
-    ];
+    for (const entry of providers) {
+      try {
+        const receipt = await entry.provider.getTransactionReceipt(
+          input.txHash
+        );
 
-    let receipt: TransactionReceipt | null = null;
+        if (!receipt) {
+          continue;
+        }
 
-    try {
-      receipt = await tx.wait(confirmations);
-    } catch (error) {
-      if (!this.isRetryableReceiptError(error)) {
-        throw error;
+        if (confirmations > 1) {
+          const currentBlock = await entry.provider.getBlockNumber();
+          const minedConfirmations = currentBlock - receipt.blockNumber + 1;
+
+          if (minedConfirmations < confirmations) {
+            return {
+              status: "pending",
+              receipt,
+              providerUsed: entry.url,
+              anchoredAt: null,
+            };
+          }
+        }
+
+        return {
+          status: "confirmed",
+          receipt,
+          providerUsed: entry.url,
+          anchoredAt: new Date(),
+        };
+      } catch (error) {
+        if (!this.isRetryableReceiptError(error)) {
+          throw error;
+        }
       }
     }
 
-    receipt ||= await this.waitForReceiptWithRetry(
-      tx.hash,
-      confirmations,
-      receiptProviders
-    );
-
     return {
-      batchId: input.batchId,
-      chainBatchId,
-      txHash: receipt.hash || tx.hash,
-      network: process.env.CHAIN_NETWORK || "polygon",
-      contractAddress,
-      anchoredAt: new Date(),
-      merkleRoot,
-      isMock: false,
+      status: "pending",
+      receipt: null,
+      providerUsed: null,
+      anchoredAt: null,
     };
+  }
+
+  async anchorBatch(input: {
+    batchId: string;
+    merkleRoot: string;
+    timestamp: number;
+  }) {
+    return this.sendAnchorBatch(input);
   }
 }
