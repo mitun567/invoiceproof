@@ -447,7 +447,7 @@
 // }
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Spinner } from "../components/ui/spinner";
 import { useToast } from "../components/ui/toast-provider";
@@ -491,16 +491,26 @@ export default function HomePage() {
   const router = useRouter();
   const { showToast } = useToast();
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState<BusyState>(null);
   const [isListening, setIsListening] = useState(false);
-
-  const hasVoiceInput = useMemo(() => Boolean(getSpeechRecognitionCtor()), []);
+  const [hasVoiceInput, setHasVoiceInput] = useState(false);
 
   useEffect(() => {
+    setHasVoiceInput(Boolean(getSpeechRecognitionCtor()));
     return () => recognitionRef.current?.stop();
   }, []);
+
+  useEffect(() => {
+    if (!promptInputRef.current) return;
+    promptInputRef.current.style.height = "0px";
+    promptInputRef.current.style.height = `${Math.min(
+      promptInputRef.current.scrollHeight,
+      260
+    )}px`;
+  }, [prompt]);
 
   async function createFromAi() {
     const normalizedPrompt = prompt
@@ -714,42 +724,65 @@ export default function HomePage() {
               <div className="prompt-label">Co-Designer Prompt</div>
 
               <div className="prompt-row">
-                <input
-                  className="prompt-input"
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  placeholder="e.g., Generate a branded invoice for a design studio in London..."
-                />
+                <div className="prompt-input-wrap">
+                  <textarea
+                    ref={promptInputRef}
+                    className="prompt-input prompt-textarea"
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    placeholder="e.g., Generate a branded invoice for a design studio in London..."
+                    rows={3}
+                  />
 
-                {hasVoiceInput ? (
-                  <button
-                    type="button"
-                    className="voice-button"
-                    onClick={toggleVoiceInput}
-                  >
-                    {isListening ? "Stop voice" : "Use voice"}
-                  </button>
-                ) : null}
+                  {hasVoiceInput ? (
+                    <button
+                      type="button"
+                      className={`voice-button${
+                        isListening ? " is-listening" : ""
+                      }`}
+                      onClick={toggleVoiceInput}
+                      aria-label={
+                        isListening ? "Stop voice input" : "Use voice input"
+                      }
+                      title={
+                        isListening ? "Stop voice input" : "Use voice input"
+                      }
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M12 15.4a3.4 3.4 0 0 0 3.4-3.4V7.4a3.4 3.4 0 1 0-6.8 0V12a3.4 3.4 0 0 0 3.4 3.4Z"
+                          fill="currentColor"
+                        />
+                        <path
+                          d="M18.1 11.7a.9.9 0 0 0-1.8 0 4.3 4.3 0 0 1-8.6 0 .9.9 0 1 0-1.8 0 6.1 6.1 0 0 0 5.2 6v2h-2a.9.9 0 1 0 0 1.8h5.8a.9.9 0 0 0 0-1.8h-2v-2a6.1 6.1 0 0 0 5.2-6Z"
+                          fill="currentColor"
+                        />
+                      </svg>
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="prompt-actions">
+                <button
+                  type="button"
+                  className="upload-link"
+                  onClick={() => uploadInputRef.current?.click()}
+                >
+                  <span className="upload-link-icon">↑</span>
+                  Upload PDF to Auto-Stylize
+                </button>
 
                 <button
                   type="button"
-                  className="primary-button"
+                  className="primary-button prompt-submit-button"
                   onClick={createFromAi}
                   disabled={busy === "ai" || prompt.trim().length < 12}
                 >
-                  <span className="button-icon-text">✦</span>
-
+                  <span className="button-sparkle">✦</span>
                   {busy === "ai" ? "Generating..." : "Generate with AI"}
                 </button>
               </div>
-
-              <button
-                type="button"
-                className="upload-link"
-                onClick={() => uploadInputRef.current?.click()}
-              >
-                Upload PDF to Auto-Stylize
-              </button>
             </div>
 
             <div className="hero-preview-shell">
@@ -1060,7 +1093,7 @@ export default function HomePage() {
           background: rgba(255, 255, 255, 0.86);
           box-shadow: 0 28px 60px rgba(21, 37, 77, 0.08);
           backdrop-filter: blur(18px);
-          border: 35px solid rgba(255, 255, 255, 0.72);
+          border: 1px solid rgba(255, 255, 255, 0.72);
         }
 
         .prompt-label {
@@ -1074,25 +1107,41 @@ export default function HomePage() {
         }
 
         .prompt-row {
-          display: grid;
-          grid-template-columns: minmax(0, 4fr) auto auto;
-          gap: 12px;
-          align-items: center;
+          display: block;
+        }
+
+        .prompt-input-wrap {
+          position: relative;
         }
 
         .prompt-input {
           width: 100%;
           min-width: 0;
-          height: 120px;
+          min-height: 104px;
           border: none;
           outline: none;
-          border-radius: 16px;
-          padding: 0 18px;
-          background: #f5f7fb;
+          border-radius: 20px;
+          padding: 18px 74px 18px 18px;
+          background: linear-gradient(180deg, #f7f9fd 0%, #f2f5fb 100%);
           color: #15213f;
           font-size: 15px;
           font-weight: 500;
-          box-shadow: inset 0 0 0 1px rgba(19, 39, 81, 0.06);
+          line-height: 1.6;
+          box-shadow: inset 0 0 0 1px rgba(19, 39, 81, 0.08);
+        }
+
+        .prompt-textarea {
+          resize: none;
+          overflow-y: auto;
+        }
+
+        .prompt-actions {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          flex-wrap: wrap;
+          margin-top: 14px;
         }
 
         .prompt-input::placeholder {
@@ -1123,33 +1172,67 @@ export default function HomePage() {
         }
 
         .primary-button {
-          height: 56px;
+          min-height: 56px;
           padding: 0 22px;
           border: none;
           border-radius: 16px;
           background: linear-gradient(
             135deg,
-            #1f4fff 0%,
-            #245dff 60%,
-            #3e7dff 100%
+            #6f90ff 0%,
+            #7d9cff 48%,
+            #8ba8ff 100%
           );
           color: white;
           font-size: 14px;
           font-weight: 800;
           letter-spacing: 0.01em;
-          box-shadow: 0 16px 32px rgba(36, 93, 255, 0.22);
-        }
-        .button-icon-text {
-          // display: inline-grid;
-          // place-items: center;
-          // font-size: 0.9rem;
-          // line-height: 1;
-          margin-right: 5px;
+          box-shadow: 0 16px 32px rgba(84, 118, 255, 0.22);
         }
 
-        .voice-button,
+        .prompt-submit-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          min-width: 196px;
+        }
+
+        .button-sparkle {
+          font-size: 15px;
+          line-height: 1;
+          transform: translateY(-1px);
+        }
+
+        .voice-button {
+          position: absolute;
+          right: 14px;
+          bottom: 14px;
+          width: 44px;
+          height: 44px;
+          padding: 0;
+          border-radius: 14px;
+          border: 1px solid rgba(73, 97, 149, 0.1);
+          background: rgba(255, 255, 255, 0.92);
+          color: #48618f;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 10px 22px rgba(31, 48, 91, 0.08);
+        }
+
+        .voice-button svg {
+          width: 18px;
+          height: 18px;
+        }
+
+        .voice-button.is-listening {
+          color: #245dff;
+          background: rgba(227, 236, 255, 0.95);
+          box-shadow: 0 12px 24px rgba(36, 93, 255, 0.16);
+        }
+
         .secondary-button {
-          height: 56px;
+          min-height: 56px;
           padding: 0 18px;
           border-radius: 16px;
           border: 1px solid rgba(15, 32, 71, 0.09);
@@ -1160,22 +1243,36 @@ export default function HomePage() {
         }
 
         .upload-link {
-          margin-top: 16px;
           border: none;
-          background: transparent;
-          color: #334b85;
+          border-radius: 16px;
+          background: linear-gradient(
+            180deg,
+            rgba(236, 242, 255, 0.96) 0%,
+            rgba(232, 240, 255, 0.96) 100%
+          );
+          color: #35539a;
           font-size: 13px;
-          font-weight: 700;
+          font-weight: 800;
           display: inline-flex;
           align-items: center;
-          gap: 8px;
+          gap: 10px;
           justify-content: center;
+          padding: 0 16px;
+          min-height: 52px;
+          box-shadow: inset 0 0 0 1px rgba(72, 100, 159, 0.08);
         }
 
-        .upload-link::before {
-          content: "⬆";
+        .upload-link-icon {
+          width: 22px;
+          height: 22px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(89, 126, 235, 0.12);
+          color: #2d57d8;
           font-size: 12px;
-          color: #2950d9;
+          font-weight: 900;
         }
 
         .hero-preview-shell {
@@ -1717,13 +1814,15 @@ export default function HomePage() {
             padding: 16px;
           }
 
-          .prompt-row {
-            grid-template-columns: 1fr;
+          .prompt-actions {
+            flex-direction: column;
+            align-items: stretch;
           }
 
           .primary-button,
           .secondary-button,
-          .voice-button {
+          .upload-link,
+          .prompt-submit-button {
             width: 100%;
           }
 
