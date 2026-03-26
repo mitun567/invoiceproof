@@ -748,7 +748,7 @@ export default function HomePage() {
                         isListening ? "Stop voice input" : "Use voice input"
                       }
                     >
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                      {/* <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path
                           d="M12 15.4a3.4 3.4 0 0 0 3.4-3.4V7.4a3.4 3.4 0 1 0-6.8 0V12a3.4 3.4 0 0 0 3.4 3.4Z"
                           fill="currentColor"
@@ -757,7 +757,25 @@ export default function HomePage() {
                           d="M18.1 11.7a.9.9 0 0 0-1.8 0 4.3 4.3 0 0 1-8.6 0 .9.9 0 1 0-1.8 0 6.1 6.1 0 0 0 5.2 6v2h-2a.9.9 0 1 0 0 1.8h5.8a.9.9 0 0 0 0-1.8h-2v-2a6.1 6.1 0 0 0 5.2-6Z"
                           fill="currentColor"
                         />
+                      </svg> */}
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="22"
+                        height="22"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="black"
+                        // stroke="#4DA3FF"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                      >
+                        <line x1="4" y1="10" x2="4" y2="14" />
+                        <line x1="8" y1="7" x2="8" y2="17" />
+                        <line x1="12" y1="5" x2="12" y2="19" />
+                        <line x1="16" y1="8" x2="16" y2="16" />
+                        <line x1="20" y1="11" x2="20" y2="13" />
                       </svg>
+                      <span>Ask AI</span>
                     </button>
                   ) : null}
                 </div>
@@ -1203,34 +1221,69 @@ export default function HomePage() {
           transform: translateY(-1px);
         }
 
+        // .voice-button {
+        //   position: absolute;
+        //   right: 14px;
+        //   bottom: 14px;
+        //   width: 84px;
+        //   height: 44px;
+        //   padding: 0;
+        //   border-radius: 14px;
+        //   border: 1px solid rgba(73, 97, 149, 0.1);
+        //   background: rgba(255, 255, 255, 0.92);
+        //   color: #48618f;
+        //   display: inline-flex;
+        //   align-items: center;
+        //   justify-content: center;
+        //   box-shadow: 0 10px 22px rgba(31, 48, 91, 0.08);
+        // }
         .voice-button {
           position: absolute;
           right: 14px;
           bottom: 14px;
-          width: 44px;
+
           height: 44px;
-          padding: 0;
+          padding: 0 14px;
+          width: auto;
+
           border-radius: 14px;
           border: 1px solid rgba(73, 97, 149, 0.1);
           background: rgba(255, 255, 255, 0.92);
           color: #48618f;
+
           display: inline-flex;
           align-items: center;
           justify-content: center;
+          gap: 4px;
+
           box-shadow: 0 10px 22px rgba(31, 48, 91, 0.08);
         }
 
         .voice-button svg {
-          width: 18px;
-          height: 18px;
+          width: 26px;
+          height: 26px;
         }
 
-        .voice-button.is-listening {
-          color: #245dff;
-          background: rgba(227, 236, 255, 0.95);
-          box-shadow: 0 12px 24px rgba(36, 93, 255, 0.16);
+        // .voice-button.is-listening {
+        //   color: #245dff;
+        //   background: rgba(227, 236, 255, 0.95);
+        //   box-shadow: 0 12px 24px rgba(36, 93, 255, 0.16);
+        // }
+        .voice-button.is-listening svg line:nth-child(1) {
+          animation-delay: 0s;
         }
-
+        .voice-button.is-listening svg line:nth-child(2) {
+          animation-delay: 0.1s;
+        }
+        .voice-button.is-listening svg line:nth-child(3) {
+          animation-delay: 0.2s;
+        }
+        .voice-button.is-listening svg line:nth-child(4) {
+          animation-delay: 0.3s;
+        }
+        .voice-button.is-listening svg line:nth-child(5) {
+          animation-delay: 0.4s;
+        }
         .secondary-button {
           min-height: 56px;
           padding: 0 18px;
